@@ -38,6 +38,7 @@ interface KillTreeOptions {
   /**
    * POSIX: grace period before survivors get SIGKILL.
    * Windows: budget for taskkill + the follow-up liveness check.
+   * Must be <= 2_147_483_647 (Node's largest timer delay).
    */
   timeoutMs?: number;
   /** Cancels the operation with an AbortError-named KillTreeError. */
@@ -74,6 +75,7 @@ try {
 | `ESPAWN` | `taskkill` / `ps` could not be started or exited non-zero |
 | `EPARSE` | the process table output could not be parsed (never silently truncated) |
 | `EFAILED` | any other OS-level failure |
+| `EREFUSED` | refused for safety: the POSIX tree contains the calling process, or the target is PID 1 |
 | `EABORTED` | `abortSignal` fired; the error's `name` is `'AbortError'` |
 
 ### Invalid arguments
@@ -86,6 +88,7 @@ killTree(1.5); // RangeError
 killTree(process.pid); // RangeError — refusing to kill the current process
 killTree(pid, { timeoutMs: -1 }); // RangeError
 killTree(pid, { signal: 'NOPE' as never }); // TypeError
+killTree(pid, { timeoutMs: 2_147_483_648 }); // RangeError (Node timer limit)
 ```
 
 ## Examples
@@ -134,6 +137,17 @@ try {
 }
 ```
 
+## Safety rails
+
+- **POSIX:** before any signal is sent, the enumerated tree is checked. If it
+  contains the calling process — `killTree(process.ppid)`, `killTree(1)`, or any
+  ancestor — the call rejects with `EREFUSED` and **nothing is signalled**. PID 1
+  is always refused. Skipping only the caller is not an option: the rest of that
+  tree could never be cleaned up safely from inside it.
+- **Windows:** there is no enumeration, so ancestry cannot be checked. Killing an
+  ancestor (including your own parent) terminates this process before the promise
+  can settle. Only `process.pid` itself is refused, synchronously.
+
 ## How it works
 
 **Windows** — `taskkill /T /F /PID <pid>` with `windowsHide`, `stdio: ['ignore',
@@ -143,9 +157,10 @@ decided by a liveness probe, never by parsing taskkill's localized text.
 **POSIX** — descendants are read from `ps -A -o pid=,ppid=`, ordered children
 before parents, signalled bottom-up (parent last, so it cannot respawn a child
 in between), then the root. With `timeoutMs`, survivors get `SIGKILL` after the
-grace period and the call only resolves once every observed pid is gone. The
-process lister and signaler are injectable internally (`src/posix.ts`), so the
-whole POSIX cascade is unit-tested on any host.
+grace period and the call only resolves once every observed pid is gone. An
+abort during enumeration kills the owned `ps` helper and rejects before the
+tree is signalled. The process lister and signaler are injectable internally
+(`src/posix.ts`), so the whole POSIX cascade is unit-tested on any host.
 
 ## Comparison with `tree-kill`
 
@@ -172,6 +187,9 @@ package is the narrow option.
 
 ## Limitations
 
+- **Windows cannot detect ancestry.** Do not call `killTree` on an ancestor of
+  the current process on Windows: it will terminate you. POSIX rejects such a
+  tree with `EREFUSED` instead.
 - **`killed: true` means the signals were delivered.** Without `timeoutMs`, the
   POSIX path returns right after the first pass; a handler that ignores `SIGTERM`
   still leaves the process alive. Pass `timeoutMs` to escalate and verify.

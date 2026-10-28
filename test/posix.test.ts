@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { defaultPosixDeps, killTreePosix, parseProcessList } from '../src/posix.js';
+import {
+  defaultPosixDeps,
+  killTreePosix,
+  listProcessesWithPs,
+  parseProcessList
+} from '../src/posix.js';
 import type { PosixDeps } from '../src/posix.js';
 import { KillTreeAbortError, KillTreeError } from '../src/errors.js';
 import type { KillSignal } from '../src/signals.js';
@@ -101,6 +106,16 @@ describe('parseProcessList', () => {
     } catch (error) {
       expect((error as KillTreeError).code).toBe('EPARSE');
     }
+  });
+
+  it('refuses to enumerate with a pre-aborted signal', async () => {
+    const controller = new AbortController();
+    controller.abort('stop');
+
+    await expect(listProcessesWithPs(controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+      code: 'EABORTED'
+    });
   });
 
   it('rejects an empty table', () => {
@@ -293,6 +308,76 @@ describe('killTreePosix', () => {
     await expect(
       killTreePosix(100, { timeoutMs: 10_000, abortSignal: controller.signal }, deps)
     ).rejects.toMatchObject({ name: 'AbortError', code: 'EABORTED' });
+  });
+
+  it('aborts during enumeration and signals nothing', async () => {
+    const world = createWorld({ entries: tree });
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    const deps: PosixDeps = {
+      ...world.deps,
+      listProcesses: (signal) => {
+        received = signal;
+        return new Promise((resolve) => {
+          queueMicrotask(() => {
+            controller.abort('cancel');
+            resolve(tree);
+          });
+        });
+      }
+    };
+
+    await expect(
+      killTreePosix(100, { abortSignal: controller.signal }, deps)
+    ).rejects.toMatchObject({ name: 'AbortError', code: 'EABORTED', pid: 100 });
+    expect(received).toBe(controller.signal);
+    expect(world.signals).toEqual([]);
+  });
+
+  it('rejects an abort even when the lister never settles', async () => {
+    const world = createWorld({ entries: tree });
+    const controller = new AbortController();
+    const never = new Promise<readonly ProcessEntry[]>(() => {});
+
+    const pending = killTreePosix(
+      100,
+      { abortSignal: controller.signal },
+      { ...world.deps, listProcesses: () => never }
+    );
+    controller.abort('stop');
+
+    await expect(pending).rejects.toMatchObject({
+      name: 'AbortError',
+      code: 'EABORTED',
+      pid: 100
+    });
+    expect(world.signals).toEqual([]);
+  });
+
+  it('refuses a tree that contains the current process', async () => {
+    const entries: ProcessEntry[] = [
+      { pid: process.pid, ppid: 500 },
+      { pid: 500, ppid: 1 }
+    ];
+    const world = createWorld({ entries });
+
+    await expect(killTreePosix(500, {}, world.deps)).rejects.toMatchObject({
+      name: 'KillTreeError',
+      code: 'EREFUSED',
+      pid: 500
+    });
+    expect(world.signals).toEqual([]);
+  });
+
+  it('refuses PID 1 without enumerating or signalling', async () => {
+    const world = createWorld({ entries: tree });
+
+    await expect(killTreePosix(1, {}, world.deps)).rejects.toMatchObject({
+      name: 'KillTreeError',
+      code: 'EREFUSED',
+      pid: 1
+    });
+    expect(world.signals).toEqual([]);
   });
 
   it('never signals an unrelated pid', async () => {

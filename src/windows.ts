@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
+import { throwIfAborted } from './abort.js';
 import { KillTreeAbortError, KillTreeError } from './errors.js';
 import { probeProcess, type Liveness, type Probe } from './probe.js';
-import { sleep as defaultSleep, throwIfAborted } from './sleep.js';
+import { sleep as defaultSleep } from './sleep.js';
 import type { KillTreeOptions, KillTreeResult } from './types.js';
 
 /** Raw observation of one `taskkill` run. */

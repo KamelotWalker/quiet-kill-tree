@@ -1,13 +1,17 @@
 import { spawn } from 'node:child_process';
-import { KillTreeError } from './errors.js';
+import { abortable, throwIfAborted } from './abort.js';
+import { KillTreeAbortError, KillTreeError } from './errors.js';
 import { probeProcess, type Probe } from './probe.js';
 import type { KillSignal } from './signals.js';
-import { sleep as defaultSleep, throwIfAborted } from './sleep.js';
+import { sleep as defaultSleep } from './sleep.js';
 import { orderTree, type ProcessEntry } from './tree.js';
 import type { KillTreeOptions, KillTreeResult } from './types.js';
 
-/** Enumerates the process table as `{ pid, ppid }` rows. */
-export type ProcessLister = () => Promise<readonly ProcessEntry[]>;
+/**
+ * Enumerates the process table as `{ pid, ppid }` rows. The signal, when given,
+ * must stop the enumeration (and any helper process) as soon as it fires.
+ */
+export type ProcessLister = (abortSignal?: AbortSignal) => Promise<readonly ProcessEntry[]>;
 
 export interface PosixDeps {
   listProcesses: ProcessLister;
@@ -51,8 +55,13 @@ export function parseProcessList(output: string): ProcessEntry[] {
 }
 
 /** Default POSIX enumerator: `ps -A -o pid=,ppid=` with piped stdio. */
-export const listProcessesWithPs: ProcessLister = () => {
+export const listProcessesWithPs: ProcessLister = (abortSignal) => {
   return new Promise<readonly ProcessEntry[]>((resolve, reject) => {
+    if (abortSignal?.aborted === true) {
+      reject(new KillTreeAbortError(0, abortSignal.reason));
+      return;
+    }
+
     const child = spawn('ps', PS_ARGS, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true
@@ -61,6 +70,20 @@ export const listProcessesWithPs: ProcessLister = () => {
     let stdout = '';
     let stderr = '';
     let settled = false;
+
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      abortSignal?.removeEventListener('abort', onAbort);
+      child.kill();
+      reject(new KillTreeAbortError(0, abortSignal?.reason));
+    };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+    // Covers an abort that lands between the pre-check and addEventListener.
+    // The cast defeats the control-flow narrowing of the earlier check.
+    if ((abortSignal as { aborted: boolean } | undefined)?.aborted === true) {
+      onAbort();
+    }
 
     child.stdout?.on('data', (chunk: Uint8Array) => {
       stdout += decoder.decode(chunk, { stream: true });
@@ -73,6 +96,7 @@ export const listProcessesWithPs: ProcessLister = () => {
     child.once('error', (error: Error) => {
       if (settled) return;
       settled = true;
+      abortSignal?.removeEventListener('abort', onAbort);
       reject(
         new KillTreeError('ESPAWN', 0, `Could not run "ps": ${error.message}`, {
           cause: error
@@ -82,6 +106,7 @@ export const listProcessesWithPs: ProcessLister = () => {
     child.once('close', (code: number | null) => {
       if (settled) return;
       settled = true;
+      abortSignal?.removeEventListener('abort', onAbort);
       stdout += decoder.decode();
       if (code !== 0) {
         const detail = stderr.trim().slice(0, 512);
@@ -141,11 +166,15 @@ function probeAll(
 
 async function enumerateTree(
   pid: number,
-  deps: PosixDeps
+  deps: PosixDeps,
+  abortSignal: AbortSignal | undefined
 ): Promise<readonly ProcessEntry[]> {
   try {
-    return await deps.listProcesses();
+    return await deps.listProcesses(abortSignal);
   } catch (error) {
+    if (error instanceof KillTreeAbortError) {
+      throw new KillTreeAbortError(pid);
+    }
     if (error instanceof KillTreeError) {
       throw new KillTreeError(
         error.code,
@@ -177,12 +206,33 @@ export async function killTreePosix(
 ): Promise<KillTreeResult> {
   throwIfAborted(pid, options.abortSignal);
 
+  if (pid === 1) {
+    throw new KillTreeError(
+      'EREFUSED',
+      pid,
+      'Refusing to kill PID 1: its tree contains the whole system'
+    );
+  }
+
   if (deps.probe(pid) === 'dead') {
     return { pid, killed: false, reason: 'not-found' };
   }
 
-  const entries = await enumerateTree(pid, deps);
+  const entries = await abortable(
+    enumerateTree(pid, deps, options.abortSignal),
+    pid,
+    options.abortSignal
+  );
+  throwIfAborted(pid, options.abortSignal);
+
   const order = orderTree(entries, pid);
+  if (order.includes(process.pid)) {
+    throw new KillTreeError(
+      'EREFUSED',
+      pid,
+      `Refusing to kill the tree of ${pid}: it contains the current process (${process.pid})`
+    );
+  }
   const signal = options.signal ?? 'SIGTERM';
 
   const send = (

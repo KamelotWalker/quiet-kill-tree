@@ -47,6 +47,26 @@ describe('killTree argument validation', () => {
     ).toThrowError(RangeError);
   });
 
+  it('rejects a timeout above the Node timer limit', () => {
+    expect(() => killTree(1, { timeoutMs: 2_147_483_648 })).toThrowError(
+      RangeError
+    );
+    expect(() =>
+      killTree(1, { timeoutMs: Number.MAX_SAFE_INTEGER })
+    ).toThrowError(/largest timer delay/);
+  });
+
+  it('drops the in-flight entry after a rejection', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const first = killTree(42_424, { abortSignal: controller.signal });
+    await expect(first).rejects.toMatchObject({ code: 'EABORTED' });
+
+    const second = killTree(42_424, { abortSignal: controller.signal });
+    expect(second).not.toBe(first);
+    await expect(second).rejects.toMatchObject({ code: 'EABORTED' });
+  });
+
   it('rejects a non-object options bag and a bogus abort signal', () => {
     expect(() => killTree(1, null as never)).toThrowError(TypeError);
     expect(() =>

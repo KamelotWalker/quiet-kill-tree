@@ -3,13 +3,6 @@ import { KillTreeAbortError } from './errors.js';
 /** Cross-runtime timer handle (`NodeJS.Timeout` in Node, number elsewhere). */
 type TimerHandle = ReturnType<typeof setTimeout>;
 
-/** Throws when the signal is already aborted. */
-export function throwIfAborted(pid: number, signal: AbortSignal | undefined): void {
-  if (signal?.aborted === true) {
-    throw new KillTreeAbortError(pid, signal.reason);
-  }
-}
-
 /**
  * `setTimeout` as a promise that rejects with an abort error and clears its
  * timer when `signal` fires.

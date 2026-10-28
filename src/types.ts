@@ -18,6 +18,9 @@ export interface KillTreeOptions {
    *
    * Windows: bounds how long `taskkill` and the follow-up liveness check may
    * take; a helper that exceeds the budget is abandoned with `ETIMEDOUT`.
+   *
+   * Must be <= 2147483647 (Node's largest timer delay); larger values throw a
+   * `RangeError` synchronously instead of overflowing to a 1 ms timer.
    */
   timeoutMs?: number;
   /** Cancels the operation; rejects with an `AbortError`-named `KillTreeError`. */

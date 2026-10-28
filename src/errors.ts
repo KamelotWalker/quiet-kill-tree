@@ -10,6 +10,8 @@ export type KillTreeErrorCode =
   | 'EPARSE'
   /** Any other OS-level failure. */
   | 'EFAILED'
+  /** The tree was refused for safety (it contains the caller, or is PID 1). */
+  | 'EREFUSED'
   /** The caller's `AbortSignal` fired. */
   | 'EABORTED';
 

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   classifyTaskkill,
   killTreeWindows,
@@ -179,6 +179,21 @@ describe('killTreeWindows', () => {
     expect(deps.clock()).toBeLessThan(1000);
   });
 
+  it('accepts the largest timer-safe timeout and forwards it unchanged', async () => {
+    const deps = createDeps({
+      entries: [],
+      state: 'dead',
+      outcome: ok
+    });
+
+    await expect(
+      killTreeWindows(77, { timeoutMs: 2_147_483_647 }, deps)
+    ).resolves.toEqual({ pid: 77, killed: true });
+    expect(deps.taskkillCalls).toEqual([
+      { pid: 77, timeoutMs: 2_147_483_647 }
+    ]);
+  });
+
   it('rejects with an abort error before doing any work', async () => {
     const deps = createDeps({
       entries: [],
@@ -203,6 +218,24 @@ describe.runIf(process.platform === 'win32')('runTaskkill (real helper)', () => 
     await expect(
       runTaskkill(999_999, undefined, controller.signal)
     ).rejects.toMatchObject({ name: 'AbortError', code: 'EABORTED' });
+  });
+
+  it('does not overflow the timer for the largest accepted timeout', async () => {
+    const exited = spawn(process.execPath, ['-e', 'process.exit(0)'], {
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    await new Promise<void>((resolve) => exited.once('exit', () => resolve()));
+    const pid = exited.pid as number;
+    const emitWarning = vi.spyOn(process, 'emitWarning');
+
+    try {
+      const outcome = await runTaskkill(pid, 2_147_483_647, undefined);
+      expect(outcome.exitCode).toBe(128);
+      expect(emitWarning).not.toHaveBeenCalled();
+    } finally {
+      emitWarning.mockRestore();
+    }
   });
 
   it('reports exit code 128 for a pid that no longer exists', async () => {

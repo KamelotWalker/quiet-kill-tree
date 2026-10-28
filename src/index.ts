@@ -10,6 +10,9 @@ export type { KillTreeOptions, KillTreeResult, NotKilledReason } from './types.j
 
 const inflight = new Map<number, Promise<KillTreeResult>>();
 
+/** Largest delay a Node timer accepts; larger values would overflow to 1 ms. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 function validatePid(pid: number): void {
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) {
     throw new RangeError(
@@ -44,6 +47,11 @@ function validateOptions(options: KillTreeOptions): void {
     ) {
       throw new RangeError(
         `timeoutMs must be a finite, non-negative number, received ${String(options.timeoutMs)}`
+      );
+    }
+    if (options.timeoutMs > MAX_TIMEOUT_MS) {
+      throw new RangeError(
+        `timeoutMs must be <= ${MAX_TIMEOUT_MS} (Node's largest timer delay), received ${String(options.timeoutMs)}`
       );
     }
   }
