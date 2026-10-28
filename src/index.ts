@@ -30,10 +30,12 @@ const impl =
  * - Concurrent calls for the same pid share one in-flight promise, so the tree
  *   is walked once. A later call that names a different signal while the
  *   in-flight run has not reached `SIGKILL` gets its own escalation run: the
- *   requested signal is delivered to the pids the in-flight run observed, even
- *   when the root has already exited. An in-flight `SIGKILL` is never
- *   downgraded — later calls join it — and on Windows every call is equally
- *   forceful, so later calls join the in-flight helper run there too.
+ *   requested signal is delivered to the union of a fresh walk and the pids the
+ *   in-flight run observed, so reparented or orphaned survivors are not lost. A
+ *   `SIGKILL` escalation only resolves once every pid in that union is gone. An
+ *   in-flight `SIGKILL` is never downgraded — later calls join it — and on
+ *   Windows every call is equally forceful, so later calls join the in-flight
+ *   helper run there too.
  * - Rejects with {@link KillTreeError} for real failures (permissions, helper
  *   failures, survivors after escalation).
  * - Never writes to the caller's stdout/stderr.

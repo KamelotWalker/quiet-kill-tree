@@ -63,7 +63,7 @@
   },
   "homepage": "https://github.com/KamelotWalker/quiet-kill-tree#readme",
   "scripts": {
-    "build": "tsup && node scripts/write-cjs-types.mjs",
+    "build": "tsup",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "prepack": "npm run build"

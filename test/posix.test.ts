@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createKillTree } from '../src/kill-tree.js';
 import {
   defaultPosixDeps,
   escalateTreePosix,
@@ -538,5 +539,109 @@ describe('escalateTreePosix', () => {
         world.deps
       )
     ).rejects.toMatchObject({ name: 'KillTreeError', code: 'ETIMEDOUT', pid: 100 });
+  });
+
+  it('signals a reparented survivor that a fresh walk can no longer reach', async () => {
+    const alive = new Set([100, 101, 102]);
+    const signals: { pid: number; signal: KillSignal }[] = [];
+    const firstTree: ProcessEntry[] = [
+      { pid: 100, ppid: 1 },
+      { pid: 101, ppid: 100 },
+      { pid: 102, ppid: 101 }
+    ];
+    // After 101 dies, 102 is reparented to init and leaves the root's tree.
+    const secondTree: ProcessEntry[] = [
+      { pid: 100, ppid: 1 },
+      { pid: 102, ppid: 1 }
+    ];
+    const tables = [firstTree, secondTree];
+    const sleepers: (() => void)[] = [];
+    let lists = 0;
+    let clock = 0;
+
+    const deps: PosixDeps = {
+      listProcesses: async () => tables[Math.min(lists++, tables.length - 1)] ?? [],
+      signalProcess: (pid, signal) => {
+        if (!alive.has(pid)) {
+          const error = new Error('no such process');
+          (error as NodeJS.ErrnoException).code = 'ESRCH';
+          throw error;
+        }
+        signals.push({ pid, signal });
+        // 100 and 102 ignore SIGTERM; only 101 dies from it.
+        if (signal === 'SIGKILL' || pid === 101) alive.delete(pid);
+      },
+      probe: (pid) => (alive.has(pid) ? 'alive' : 'dead'),
+      sleep: () =>
+        new Promise<void>((resolve) => {
+          sleepers.push(resolve);
+        }),
+      now: () => clock
+    };
+
+    const killTree = createKillTree({
+      distinctSignals: true,
+      run: (target, options, publish) =>
+        killTreePosix(target, options, deps, publish),
+      escalate: (target, targets, options) =>
+        escalateTreePosix(target, targets, options, deps)
+    });
+
+    const term = killTree(100, { timeoutMs: 20_000 });
+    for (let spin = 0; spin < 10_000 && sleepers.length === 0; spin += 1) {
+      await Promise.resolve();
+    }
+    expect(sleepers.length, 'the SIGTERM pass must be waiting').toBeGreaterThan(0);
+    expect(alive.has(102), 'the grandchild must survive the SIGTERM pass').toBe(true);
+
+    // The escalation cannot wait for the first call's 20 s grace period: its
+    // sleepers are still pending while this resolves.
+    const kill = killTree(100, { signal: 'SIGKILL' });
+    await expect(kill).resolves.toEqual({ pid: 100, killed: true });
+
+    expect(signals).toEqual([
+      { pid: 102, signal: 'SIGTERM' },
+      { pid: 101, signal: 'SIGTERM' },
+      { pid: 100, signal: 'SIGTERM' },
+      { pid: 100, signal: 'SIGKILL' },
+      { pid: 102, signal: 'SIGKILL' }
+    ]);
+    expect(alive.has(102), 'the reparented survivor must be gone').toBe(false);
+
+    for (const release of sleepers) release();
+    await expect(term).resolves.toEqual({ pid: 100, killed: true });
+  }, 5_000);
+
+  it('reports ETIMEDOUT when a merged survivor ignores SIGKILL', async () => {
+    const alive = new Set([100, 102]);
+    let clock = 0;
+
+    const deps: PosixDeps = {
+      listProcesses: async () => [
+        { pid: 100, ppid: 1 },
+        { pid: 102, ppid: 1 }
+      ],
+      signalProcess: (pid, signal) => {
+        if (!alive.has(pid)) {
+          const error = new Error('no such process');
+          (error as NodeJS.ErrnoException).code = 'ESRCH';
+          throw error;
+        }
+        void signal;
+        // 102 is only reachable through the observed snapshot and ignores
+        // every signal.
+        if (pid !== 102) alive.delete(pid);
+      },
+      probe: (pid) => (alive.has(pid) ? 'alive' : 'dead'),
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      now: () => clock
+    };
+
+    await expect(
+      escalateTreePosix(100, [102, 101, 100], { signal: 'SIGKILL' }, deps)
+    ).rejects.toMatchObject({ name: 'KillTreeError', code: 'ETIMEDOUT', pid: 100 });
+    expect(alive.has(102)).toBe(true);
   });
 });

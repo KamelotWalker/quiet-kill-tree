@@ -216,13 +216,15 @@ A call never silently loses a stronger request:
 | `SIGKILL` | anything | the in-flight promise is returned; `SIGKILL` is never downgraded |
 | Windows, any signal | anything | the in-flight promise is returned; `signal` is ignored there and `taskkill /F` is already the strongest action |
 
-An escalation enumerates the tree again while the root is still alive, so
-children spawned in the meantime are included. Once the root has exited its
-descendants cannot be rediscovered from a dead parent, so the pids the in-flight
-run observed are probed and the survivors receive the requested signal. The
-escalation's own `timeoutMs` and `abortSignal` govern that run. An entry is
-removed when its promise settles, so a call made after the work finished starts
-fresh.
+An escalation targets the union of a fresh enumeration (while the root is still
+alive, so children spawned in the meantime are included) and the pids the
+in-flight run observed that still exist. The second half matters: when an
+intermediate parent exits, its children are reparented away from the root and a
+fresh walk from the root can no longer see them. A `SIGKILL` escalation only
+resolves with `killed: true` once every pid in that union is gone; survivors
+reject with `ETIMEDOUT`, as in a normal call. The escalation's own `timeoutMs`
+and `abortSignal` govern that run. An entry is removed when its promise settles,
+so a call made after the work finished starts fresh.
 
 #### Options
 

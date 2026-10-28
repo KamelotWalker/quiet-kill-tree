@@ -342,11 +342,14 @@ async function terminate(
  * Delivers `options.signal` to the tree of `pid` while an earlier run for the
  * same pid may still be in flight.
  *
- * When the root is still alive the tree is enumerated again: a fresh walk finds
- * any child spawned in the meantime and is at least as strong as the snapshot.
- * When the root is already gone, its descendants cannot be rediscovered from a
- * dead parent, so the pids the in-flight run observed are probed individually
- * and the ones still alive are signalled. Pids are probed again right before
+ * The target set is the union of a fresh enumeration (while the root is alive)
+ * and the pids the earlier run observed that still exist. A plain re-walk is not
+ * enough: if an intermediate parent exited, its children were reparented away
+ * from the root and a fresh walk from the root can no longer see them, even
+ * though their pids are known.
+ *
+ * A `SIGKILL` escalation only reports success once every pid in that union is
+ * gone; survivors reject with `ETIMEDOUT`. Pids are probed again right before
  * they are signalled, but a pid reused in between cannot be detected.
  */
 export async function escalateTreePosix(
@@ -357,6 +360,14 @@ export async function escalateTreePosix(
 ): Promise<KillTreeResult> {
   throwIfAborted(pid, options.abortSignal);
 
+  if (pid === 1) {
+    throw new KillTreeError(
+      'EREFUSED',
+      pid,
+      'Refusing to kill PID 1: its tree contains the whole system'
+    );
+  }
+
   if (targets.includes(process.pid)) {
     throw new KillTreeError(
       'EREFUSED',
@@ -365,14 +376,64 @@ export async function escalateTreePosix(
     );
   }
 
-  if (deps.probe(pid) !== 'dead') {
-    return killTreePosix(pid, options, deps);
+  const known = targets.filter((target) => deps.probe(target) !== 'dead');
+  const signal = options.signal ?? 'SIGTERM';
+  const runOptions = escalationOptions(options, signal);
+
+  if (deps.probe(pid) === 'dead') {
+    if (known.length === 0) {
+      return { pid, killed: false, reason: 'already-exited' };
+    }
+    return terminate(pid, known, signal, runOptions, deps);
   }
 
-  const alive = targets.filter((target) => deps.probe(target) !== 'dead');
-  if (alive.length === 0) {
-    return { pid, killed: false, reason: 'already-exited' };
+  const entries = await abortable(
+    enumerateTree(pid, deps, options.abortSignal),
+    pid,
+    options.abortSignal
+  );
+  throwIfAborted(pid, options.abortSignal);
+
+  const merged = mergeTargets(orderTree(entries, pid), known);
+  if (merged.includes(process.pid)) {
+    throw new KillTreeError(
+      'EREFUSED',
+      pid,
+      `Refusing to kill the tree of ${pid}: it contains the current process (${process.pid})`
+    );
   }
 
-  return terminate(pid, alive, options.signal ?? 'SIGTERM', options, deps);
+  return terminate(pid, merged, signal, runOptions, deps);
+}
+
+/**
+ * Fresh post-order first, so a surviving parent is still signalled after its
+ * surviving children, then the observed pids a fresh walk can no longer reach
+ * because they were reparented away from the root.
+ */
+function mergeTargets(
+  fresh: readonly number[],
+  observed: readonly number[]
+): number[] {
+  const merged = [...fresh];
+  const seen = new Set(fresh);
+  for (const target of observed) {
+    if (seen.has(target)) continue;
+    seen.add(target);
+    merged.push(target);
+  }
+  return merged;
+}
+
+/**
+ * A `SIGKILL` escalation without an explicit `timeoutMs` still has to prove the
+ * merged targets are gone, so it runs the verify pass: no grace period, then a
+ * bounded settle window for the signalled pids to disappear.
+ */
+function escalationOptions(
+  options: KillTreeOptions,
+  signal: KillSignal
+): KillTreeOptions {
+  if (signal !== 'SIGKILL' || options.timeoutMs !== undefined) return options;
+  return { ...options, timeoutMs: 0 };
 }
