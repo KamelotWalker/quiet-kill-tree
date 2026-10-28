@@ -1,0 +1,59 @@
+{
+  "name": "quiet-kill-tree",
+  "version": "0.1.0",
+  "description": "Promise-based, silent, idempotent process-tree termination for Windows and POSIX.",
+  "keywords": [
+    "kill",
+    "process-tree",
+    "tree-kill",
+    "taskkill",
+    "child-process",
+    "cleanup",
+    "signals",
+    "windows",
+    "posix"
+  ],
+  "license": "MIT",
+  "author": "",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
