@@ -7,7 +7,7 @@ export default defineConfig({
   clean: true,
   sourcemap: false,
   minify: false,
-  target: 'node20',
+  target: 'node18',
   platform: 'node',
   outExtension: ({ format }) => ({ js: format === 'esm' ? '.js' : '.cjs' })
 });

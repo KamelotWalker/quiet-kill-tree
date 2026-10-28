@@ -2,7 +2,7 @@
 
 > Promise-based, silent, idempotent process-tree termination for Windows and POSIX. One `await` kills a child process and everything it spawned; a pid that is already gone resolves instead of throwing, and helper processes never write to your stdio.
 
-quiet-kill-tree is a zero-dependency Node.js package for tearing down child
+quiet-kill-tree is a zero-dependency Node.js 18+ package for tearing down child
 process trees from dev servers, test runners, MCP servers and CLI tools. The
 public surface is `killTree(pid, options)` plus its option, result and error
 types.

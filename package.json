@@ -1,6 +1,6 @@
 {
   "name": "quiet-kill-tree",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Kill a child process tree on Windows or POSIX with promises, typed errors, and silent helpers.",
   "keywords": [
     "kill",
@@ -29,7 +29,10 @@
   "type": "module",
   "sideEffects": false,
   "engines": {
-    "node": ">=20"
+    "node": ">=18"
+  },
+  "overrides": {
+    "vite": "^6.4.5"
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

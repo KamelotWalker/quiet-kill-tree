@@ -444,13 +444,14 @@ forceful.
 
 ### Does it work with ESM, CommonJS, Bun and Deno?
 
-The package ships ESM, CJS and TypeScript declarations for Node 20 and newer.
+The package ships ESM, CJS and TypeScript declarations for Node 18 and newer.
 Bun works through its Node compatibility layer. Deno needs `--allow-run` and
 `--allow-sys`; it is not part of this repo's CI matrix.
 
 ## CI
 
-GitHub Actions builds and tests Node 20, 22 and 24 on Ubuntu, macOS and Windows.
+GitHub Actions builds and tests Node 18, 20, 22 and 24 on Ubuntu, macOS and
+Windows.
 Real-process integration tests verify that every pid in a Node tree disappears.
 The POSIX suite also exercises `ps -A -o pid=,ppid=` and SIGKILL escalation for
 a tree with ready, installed SIGTERM handlers that deliberately ignore SIGTERM.
