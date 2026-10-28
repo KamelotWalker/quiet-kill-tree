@@ -1,21 +1,28 @@
 'use strict';
 
-// Test fixture: a tree of node processes that never exit on their own.
-// root -> N children -> one grandchild each.
-// Prints one JSON line with every pid once the whole tree is running.
-
+// root -> N children -> one grandchild each. Every process reports readiness
+// only after its signal handler is installed, including the grandchildren.
 const { spawn } = require('node:child_process');
-
 const count = Number(process.argv[2] ?? 3);
+const ignoreSigterm = process.argv[3] === 'true';
 const pids = [process.pid];
+if (ignoreSigterm) process.on('SIGTERM', () => {});
 
-const KEEP_ALIVE = 'setInterval(() => {}, 1000);';
-
+const leafScript = `
+if (${ignoreSigterm}) process.on('SIGTERM', () => {});
+setInterval(() => {}, 1000);
+process.stdout.write('ready\\n');
+`;
 const childScript = `
 const { spawn } = require('node:child_process');
-const leaf = spawn(process.execPath, ['-e', '${KEEP_ALIVE}'], { stdio: 'ignore', windowsHide: true });
-process.stdout.write(JSON.stringify({ leaf: leaf.pid }));
-${KEEP_ALIVE}
+if (${ignoreSigterm}) process.on('SIGTERM', () => {});
+const leaf = spawn(process.execPath, ['-e', ${JSON.stringify(leafScript)}], {
+  stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true
+});
+leaf.stdout.once('data', () => {
+  process.stdout.write(JSON.stringify({ leaf: leaf.pid }) + '\\n');
+});
+setInterval(() => {}, 1000);
 `;
 
 function spawnChild() {
@@ -29,9 +36,9 @@ function spawnChild() {
     child.once('error', reject);
     child.stdout.on('data', (chunk) => {
       buffer += chunk.toString();
-      const end = buffer.indexOf('}');
+      const end = buffer.indexOf('\n');
       if (end === -1) return;
-      const parsed = JSON.parse(buffer.slice(0, end + 1));
+      const parsed = JSON.parse(buffer.slice(0, end));
       pids.push(parsed.leaf);
       resolve();
     });
@@ -39,9 +46,7 @@ function spawnChild() {
 }
 
 Promise.all(Array.from({ length: count }, spawnChild)).then(
-  () => {
-    process.stdout.write(`${JSON.stringify(pids)}\n`);
-  },
+  () => process.stdout.write(`${JSON.stringify(pids)}\n`),
   (error) => {
     process.stderr.write(`${String(error)}\n`);
     process.exit(1);

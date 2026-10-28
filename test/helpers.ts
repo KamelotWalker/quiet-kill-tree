@@ -9,11 +9,11 @@ export interface ProcessTree {
 const isWindows = process.platform === 'win32';
 
 /** Starts the tree fixture and resolves once every pid in it exists. */
-export async function spawnProcessTree(count = 3): Promise<ProcessTree> {
+export async function spawnProcessTree(count = 3, ignoreSigterm = false): Promise<ProcessTree> {
   const fixture = fileURLToPath(
     new URL('./fixtures/tree.cjs', import.meta.url)
   );
-  const parent = spawn(process.execPath, [fixture, String(count)], {
+  const parent = spawn(process.execPath, [fixture, String(count), String(ignoreSigterm)], {
     stdio: ['ignore', 'pipe', 'ignore'],
     windowsHide: true
   });

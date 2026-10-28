@@ -214,6 +214,14 @@ package is the narrow option.
   `process.kill`. **Bun** works through its Node compatibility layer. Verified on
   Node 24 / Windows 11; Bun and Deno are not covered by CI in this repo.
 
+## CI
+
+GitHub Actions builds and tests Node 20, 22 and 24 on Ubuntu, macOS and Windows.
+Real-process integration tests verify that every pid in a Node tree disappears.
+The POSIX suite also exercises `ps -A -o pid=,ppid=` and SIGKILL escalation for
+a tree with ready, installed SIGTERM handlers that deliberately ignore SIGTERM.
+Platform-specific integration suites run only on their matching operating systems.
+
 ## License
 
 MIT

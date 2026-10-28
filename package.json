@@ -41,8 +41,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "git+https://github.com/KamelotWalker/quiet-kill-tree.git"
   },
+  "bugs": {
+    "url": "https://github.com/KamelotWalker/quiet-kill-tree/issues"
+  },
+  "homepage": "https://github.com/KamelotWalker/quiet-kill-tree#readme",
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
