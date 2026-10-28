@@ -56,7 +56,8 @@ stdio.
 | Helper output isolation | helper stdio is piped or ignored, never inherited; covered by tests | helper output is captured, not documented as a guarantee | n/a | stdio configurable | `silent` suppresses errors, not helper output |
 | Runtime dependencies | 0 | 0 | 0 | 12 | 5 |
 | Module format | ESM + CJS + types | CJS, `export =` types | ESM + types | ESM + types | ESM + types |
-| Last release | 0.1.1 | 1.2.2 (2019-12-11) | 1.0.0 (2026-06-08) | 10.2.1 (2026-10-23) | 10.0.3 (2026-01-14) |
+| Version | 0.1.1 | 1.2.2 | 1.0.0 | 10.2.1 | 10.0.3 |
+| Last published | 0.1.0 on 2026-10-28 | 2019-12-11 | 2026-06-08 | 2026-10-23 | 2026-01-14 |
 
 Competitor facts were read from the npm registry and the published tarballs on
 2026-10-28; the links go to each package's npm page, where the same metadata is
@@ -135,7 +136,7 @@ const { killed, reason } = await killTree(pid);
 | `tree-kill` callback | `quiet-kill-tree` |
 | --- | --- |
 | `error.code === 128` on Windows, process gone | resolves `{ killed: false, reason: 'already-exited' }` |
-| `error.code === 'ESRCH'` | resolved as not killed, or `EREFUSED` if the tree contains you |
+| `error.code === 'ESRCH'` | treated as already exited; `EREFUSED` is reserved for a tree that contains you |
 | `error.code === 'EPERM'` / access denied | rejects `KillTreeError` with `code: 'EACCES'` |
 | helper binary missing | rejects `KillTreeError` with `code: 'ESPAWN'` |
 | no timeout / hang after `SIGTERM` | pass `timeoutMs`; survivors are escalated to `SIGKILL` on POSIX |
@@ -237,7 +238,7 @@ class KillTreeError extends Error {
   readonly code: KillTreeErrorCode;
   readonly pid: number;
   readonly exitCode: number | null | undefined;
-  readonly cause?: unknown; // standard Error.cause when supplied
+  // cause is the standard Error.cause, set when an underlying error exists
 }
 ```
 
