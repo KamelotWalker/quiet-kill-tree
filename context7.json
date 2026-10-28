@@ -1,0 +1,25 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "quiet-kill-tree",
+  "description": "Promise-based process-tree termination for Node.js on Windows and POSIX. killTree(pid, options) resolves with a typed result, rejects with KillTreeError codes, supports AbortSignal, and can escalate to SIGKILL after a grace period.",
+  "branch": "main",
+  "folders": [
+    "src"
+  ],
+  "excludeFolders": [
+    "dist",
+    "node_modules",
+    "test"
+  ],
+  "excludeFiles": [
+    "package-lock.json"
+  ],
+  "rules": [
+    "Import { killTree } from 'quiet-kill-tree' and await it; there is no callback form.",
+    "Check result.killed before treating teardown as a failure: a gone pid resolves with killed: false and reason 'not-found' or 'already-exited'.",
+    "Catch KillTreeError and branch on error.code ('EACCES', 'ETIMEDOUT', 'ESPAWN', 'EPARSE', 'EFAILED', 'EREFUSED', 'EABORTED'); never parse the message text.",
+    "Pass timeoutMs when a POSIX process that ignores SIGTERM must be escalated to SIGKILL; on Windows the same option only bounds the taskkill helper.",
+    "Keep the ChildProcess handle and call killTree(child.pid) promptly, because a pid can be reused after the process exits.",
+    "Never call killTree(process.pid); it throws RangeError. On Windows, killing an ancestor terminates the current process."
+  ]
+}

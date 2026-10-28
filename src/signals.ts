@@ -4,6 +4,13 @@
  * The union mirrors `NodeJS.Signals` so the public typings stay usable without
  * `@types/node` (Deno, Bun, browser type-checking), while any value typed as
  * `NodeJS.Signals` is assignable to it.
+ *
+ * @example
+ * ```ts
+ * import { killTree } from 'quiet-kill-tree';
+ *
+ * await killTree(pid, { signal: 'SIGINT' });
+ * ```
  */
 export type KillSignal =
   | 'SIGABRT'

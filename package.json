@@ -1,17 +1,28 @@
 {
   "name": "quiet-kill-tree",
-  "version": "0.1.0",
-  "description": "Promise-based, silent, idempotent process-tree termination for Windows and POSIX.",
+  "version": "0.1.1",
+  "description": "Kill a child process tree on Windows or POSIX with promises, typed errors, and silent helpers.",
   "keywords": [
     "kill",
     "process-tree",
     "tree-kill",
-    "taskkill",
+    "tree-kill-alternative",
+    "kill-process",
     "child-process",
+    "taskkill",
+    "process-cleanup",
     "cleanup",
+    "sigterm",
+    "sigkill",
     "signals",
     "windows",
-    "posix"
+    "posix",
+    "process-management",
+    "zombie-processes",
+    "dev-server",
+    "test-runner",
+    "abortsignal",
+    "nodejs"
   ],
   "license": "MIT",
   "author": "",
@@ -37,7 +48,8 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "llms.txt"
   ],
   "repository": {
     "type": "git",
