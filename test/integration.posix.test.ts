@@ -46,4 +46,33 @@ describePosix('killTree integration (POSIX)', () => {
       forceKillAll(tree.pids);
     }
   }, 30_000);
+
+  it('delivers a SIGKILL that lands while a SIGTERM grace period is still running', async () => {
+    const tree = await spawnProcessTree(2, true);
+    try {
+      for (const pid of tree.pids) expect(isAlive(pid)).toBe(true);
+
+      const started = performance.now();
+      const term = killTree(tree.root, { timeoutMs: 20_000 });
+      const kill = killTree(tree.root, { signal: 'SIGKILL' });
+
+      expect(kill).not.toBe(term);
+
+      await expect(kill).resolves.toEqual({ pid: tree.root, killed: true });
+      const termResult = await term;
+      expect(termResult.pid).toBe(tree.root);
+      // When the escalation wins the race, the SIGTERM pass can observe only
+      // ESRCH and report 'already-exited'; either outcome is consistent.
+
+      // A dropped SIGKILL would force both promises to wait out the whole grace
+      // period before the first call escalates on its own.
+      expect(performance.now() - started).toBeLessThan(10_000);
+
+      for (const pid of tree.pids) {
+        expect(await waitForGone(pid), `pid ${pid} must disappear`).toBe(true);
+      }
+    } finally {
+      forceKillAll(tree.pids);
+    }
+  }, 30_000);
 });

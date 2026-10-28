@@ -117,4 +117,45 @@ describeWindows('killTree integration (Windows)', () => {
     },
     30_000
   );
+
+  it(
+    'honours a SIGKILL request that lands while a taskkill run is in flight',
+    async () => {
+      const tree = await spawnProcessTree(2);
+      try {
+        for (const pid of tree.pids) {
+          expect(isAlive(pid), `pid ${pid} should be running before the kill`).toBe(
+            true
+          );
+        }
+
+        const first = killTree(tree.root, { timeoutMs: 5000 });
+        const second = killTree(tree.root, { signal: 'SIGKILL' });
+
+        // Windows has no graceful signal: every call runs taskkill /T /F, so a
+        // later call joins the in-flight helper instead of being dropped.
+        expect(second).toBe(first);
+
+        const [a, b] = await Promise.all([first, second]);
+        expect(a).toEqual({ pid: tree.root, killed: true });
+        expect(b).toBe(a);
+
+        for (const pid of tree.pids) {
+          expect(
+            await waitForGone(pid),
+            `pid ${pid} should be gone after the double call`
+          ).toBe(true);
+        }
+
+        await expect(killTree(tree.root, { signal: 'SIGKILL' })).resolves.toEqual({
+          pid: tree.root,
+          killed: false,
+          reason: 'not-found'
+        });
+      } finally {
+        forceKillAll(tree.pids);
+      }
+    },
+    30_000
+  );
 });

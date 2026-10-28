@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   defaultPosixDeps,
+  escalateTreePosix,
   killTreePosix,
   listProcessesWithPs,
   parseProcessList
@@ -393,5 +394,149 @@ describe('killTreePosix', () => {
     expect(typeof defaultPosixDeps.listProcesses).toBe('function');
     expect(typeof defaultPosixDeps.signalProcess).toBe('function');
     expect(defaultPosixDeps.now()).toBeGreaterThan(0);
+  });
+
+  it('publishes the ordered targets before the first signal', async () => {
+    const world = createWorld({ entries: tree });
+    const published: number[][] = [];
+
+    await killTreePosix(100, {}, world.deps, (targets) => {
+      expect(world.signals).toEqual([]);
+      published.push([...targets]);
+    });
+
+    expect(published).toEqual([[103, 101, 102, 100]]);
+  });
+});
+
+describe('escalateTreePosix', () => {
+  it('re-walks the tree while the root is still alive', async () => {
+    const world = createWorld({
+      entries: tree,
+      ignoreSigterm: [100, 101, 102, 103]
+    });
+    let walks = 0;
+    const lister = world.deps.listProcesses;
+    world.deps.listProcesses = (signal) => {
+      walks += 1;
+      return lister(signal);
+    };
+
+    await killTreePosix(100, {}, world.deps);
+    expect(walks).toBe(1);
+    expect(world.alive(100)).toBe(true);
+
+    const result = await escalateTreePosix(
+      100,
+      [103, 101, 102, 100],
+      { signal: 'SIGKILL' },
+      world.deps
+    );
+
+    expect(result).toEqual({ pid: 100, killed: true });
+    expect(walks).toBe(2);
+    expect(
+      world.signals
+        .filter((entry) => entry.signal === 'SIGKILL')
+        .map((entry) => entry.pid)
+    ).toEqual([103, 101, 102, 100]);
+    for (const pid of [100, 101, 102, 103]) {
+      expect(world.alive(pid), `pid ${pid} should be gone`).toBe(false);
+    }
+    expect(world.signals.some((entry) => entry.pid === 900)).toBe(false);
+  });
+
+  it('force-signals the observed survivors once the root is gone', async () => {
+    const world = createWorld({ entries: tree, ignoreSigterm: [103] });
+
+    await killTreePosix(100, {}, world.deps);
+    expect(world.alive(100)).toBe(false);
+    expect(world.alive(103)).toBe(true);
+
+    world.signals.length = 0;
+    let walks = 0;
+    const lister = world.deps.listProcesses;
+    world.deps.listProcesses = (signal) => {
+      walks += 1;
+      return lister(signal);
+    };
+
+    const result = await escalateTreePosix(
+      100,
+      [103, 101, 100],
+      { signal: 'SIGKILL' },
+      world.deps
+    );
+
+    expect(result).toEqual({ pid: 100, killed: true });
+    expect(walks, 'a dead root cannot be walked again').toBe(0);
+    expect(world.signals).toEqual([{ pid: 103, signal: 'SIGKILL' }]);
+    expect(world.alive(103)).toBe(false);
+  });
+
+  it('resolves already-exited when nothing observed is alive', async () => {
+    const world = createWorld({ entries: tree });
+
+    await killTreePosix(100, {}, world.deps);
+    const result = await escalateTreePosix(
+      100,
+      [103, 101, 100],
+      { signal: 'SIGKILL' },
+      world.deps
+    );
+
+    expect(result).toEqual({ pid: 100, killed: false, reason: 'already-exited' });
+  });
+
+  it('refuses a snapshot that contains the current process', async () => {
+    const world = createWorld({ entries: tree });
+
+    await expect(
+      escalateTreePosix(100, [process.pid], { signal: 'SIGKILL' }, world.deps)
+    ).rejects.toMatchObject({ name: 'KillTreeError', code: 'EREFUSED' });
+    expect(world.signals).toEqual([]);
+  });
+
+  it('rejects a pre-aborted escalation without signalling', async () => {
+    const world = createWorld({ entries: tree });
+    const controller = new AbortController();
+    controller.abort('stop');
+
+    await expect(
+      escalateTreePosix(
+        100,
+        [104],
+        { signal: 'SIGKILL', abortSignal: controller.signal },
+        world.deps
+      )
+    ).rejects.toMatchObject({ name: 'AbortError', code: 'EABORTED' });
+    expect(world.signals).toEqual([]);
+  });
+
+  it('reports EACCES when an observed survivor refuses the signal', async () => {
+    const world = createWorld({ entries: [{ pid: 103, ppid: 100 }], denied: [103] });
+
+    await expect(
+      escalateTreePosix(100, [103], { signal: 'SIGKILL' }, world.deps)
+    ).rejects.toMatchObject({ name: 'KillTreeError', code: 'EACCES', pid: 100 });
+  });
+
+  it('reports ETIMEDOUT when an observed survivor ignores SIGKILL', async () => {
+    const world = createWorld({
+      entries: tree,
+      ignoreSigterm: [103],
+      ignoreSigkill: [103]
+    });
+
+    await killTreePosix(100, {}, world.deps);
+
+    await expect(
+      escalateTreePosix(
+        100,
+        [103, 101, 100],
+        { signal: 'SIGKILL', timeoutMs: 100 },
+        world.deps
+      )
+    ).rejects.toMatchObject({ name: 'KillTreeError', code: 'ETIMEDOUT', pid: 100 });
   });
 });

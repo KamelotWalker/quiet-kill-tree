@@ -20,7 +20,8 @@ types.
 
 ## Source
 
-- [src/index.ts](https://github.com/KamelotWalker/quiet-kill-tree/blob/main/src/index.ts): `killTree` entry point, argument validation, in-flight deduplication.
+- [src/index.ts](https://github.com/KamelotWalker/quiet-kill-tree/blob/main/src/index.ts): `killTree` entry point wired to the platform implementation.
+- [src/kill-tree.ts](https://github.com/KamelotWalker/quiet-kill-tree/blob/main/src/kill-tree.ts): argument validation, in-flight deduplication and signal escalation between concurrent calls.
 - [src/posix.ts](https://github.com/KamelotWalker/quiet-kill-tree/blob/main/src/posix.ts): `ps` enumeration, bottom-up signalling, `SIGKILL` escalation.
 - [src/windows.ts](https://github.com/KamelotWalker/quiet-kill-tree/blob/main/src/windows.ts): `taskkill /T /F`, liveness probe, exit-status classification.
 - [src/errors.ts](https://github.com/KamelotWalker/quiet-kill-tree/blob/main/src/errors.ts): `KillTreeError`, `KillTreeAbortError` and error codes.

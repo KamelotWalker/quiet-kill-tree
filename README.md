@@ -9,6 +9,8 @@ Kill a process and every process it spawned, on Windows and POSIX, with one
 npm install quiet-kill-tree
 ```
 
+Requires Node 18 or newer and has no runtime dependencies.
+
 ```ts
 import { spawn } from 'node:child_process';
 import { killTree } from 'quiet-kill-tree';
@@ -49,15 +51,15 @@ stdio.
 | API | `await killTree(pid, options)` | `treeKill(pid, signal?, callback)` | `await pidtree(pid)` | `execa(file, args)` + `subprocess.kill()` | `await fkill(input, options)` |
 | Tree teardown for a pid you did not spawn | yes | yes | no — enumeration only | only processes it spawned (`killDescendants`, default `false`) | Windows only (`tree: true` is a Windows-only option) |
 | Already-exited pid | resolves `{ killed: false, reason }` | rejects on Windows (taskkill exit 128); `ESRCH` is swallowed per pid on POSIX | n/a | n/a | throws unless `silent: true` |
-| Duplicate concurrent calls | one shared in-flight promise | one walk per call | one enumeration per call | n/a | one kill per call |
+| Duplicate concurrent calls | one shared in-flight promise for the same signal; a later, different signal escalates the same tree | one walk per call | one enumeration per call | n/a | one kill per call |
 | Cancellation | `abortSignal` | — | — | `cancelSignal` for the spawned process | — |
 | Grace period, then force | `timeoutMs` | — | — | `forceKillAfterDelay` | `forceAfterTimeout` |
 | Machine-readable error codes | `KillTreeError.code` (7 values) | — | — | typed error classes, no OS code mapping | — |
 | Helper output isolation | helper stdio is piped or ignored, never inherited; covered by tests | helper output is captured, not documented as a guarantee | n/a | stdio configurable | `silent` suppresses errors, not helper output |
 | Runtime dependencies | 0 | 0 | 0 | 12 | 5 |
 | Module format | ESM + CJS + types | CJS, `export =` types | ESM + types | ESM + types | ESM + types |
-| Version | 0.1.1 | 1.2.2 | 1.0.0 | 10.2.1 | 10.0.3 |
-| Last published | 0.1.0 on 2026-10-28 | 2019-12-11 | 2026-06-08 | 2026-10-23 | 2026-01-14 |
+| Version | 0.2.0 | 1.2.2 | 1.0.0 | 10.2.1 | 10.0.3 |
+| Last published | 0.1.1 on 2026-10-28 | 2019-12-11 | 2026-06-08 | 2026-10-23 | 2026-01-14 |
 
 Competitor facts were read from the npm registry and the published tarballs on
 2026-10-28; the links go to each package's npm page, where the same metadata is
@@ -203,9 +205,24 @@ or the pid is gone.
 - **Rejects** — with `KillTreeError` for real failures. A gone pid is never an
   error.
 
-Concurrent calls for the same pid share one in-flight promise; the tree is only
-walked once and the first call's options win. The entry is removed when the
-promise settles, so a later call starts fresh.
+#### Concurrent calls and signal escalation
+
+A call never silently loses a stronger request:
+
+| in-flight run | later call asks for | what happens |
+| --- | --- | --- |
+| any signal | the same signal | the same promise is returned; the tree is walked once |
+| a signal other than `SIGKILL` | a different signal, including `SIGKILL` | the later call gets its own escalation run and delivers the requested signal to the pids the in-flight run observed |
+| `SIGKILL` | anything | the in-flight promise is returned; `SIGKILL` is never downgraded |
+| Windows, any signal | anything | the in-flight promise is returned; `signal` is ignored there and `taskkill /F` is already the strongest action |
+
+An escalation enumerates the tree again while the root is still alive, so
+children spawned in the meantime are included. Once the root has exited its
+descendants cannot be rediscovered from a dead parent, so the pids the in-flight
+run observed are probed and the survivors receive the requested signal. The
+escalation's own `timeoutMs` and `abortSignal` govern that run. An entry is
+removed when its promise settles, so a call made after the work finished starts
+fresh.
 
 #### Options
 
@@ -306,19 +323,23 @@ value typed as `NodeJS.Signals` is assignable to `KillSignal`.
 
 ## More examples
 
-### Graceful stop, then force
+### Escalate a stop that is already running
 
 ```ts
-// POSIX: SIGTERM everywhere, 3 s grace, SIGKILL for whoever is left.
-await killTree(pid, { signal: 'SIGTERM', timeoutMs: 3_000 });
+// POSIX: SIGTERM with a 10 s grace period, then SIGKILL for the survivors.
+const stopping = killTree(pid, { timeoutMs: 10_000 });
+
+// A different signal while that run is in flight is not dropped: it gets its
+// own escalation run and SIGKILLs the same tree right away.
+const forced = killTree(pid, { signal: 'SIGKILL' });
+
+forced === stopping; // false
 ```
 
-### Do not walk the same tree twice
-
-```ts
-const [a, b] = await Promise.all([killTree(pid), killTree(pid)]);
-a === b; // true — one enumeration, one helper run
-```
+Two calls with the same signal do share one promise
+(`killTree(pid) === killTree(pid)`); see
+[Concurrent calls and signal escalation](#concurrent-calls-and-signal-escalation)
+for the full rules.
 
 ### Abort during shutdown
 
@@ -374,8 +395,10 @@ before parents, signalled bottom-up (parent last, so it cannot respawn a child
 in between), then the root. With `timeoutMs`, survivors get `SIGKILL` after the
 grace period and the call only resolves once every observed pid is gone. An
 abort during enumeration kills the owned `ps` helper and rejects before the
-tree is signalled. The process lister and signaler are injectable internally
-(`src/posix.ts`), so the whole POSIX cascade is unit-tested on any host.
+tree is signalled. A later call with a different signal runs its escalation
+while the first call is still in flight (`src/kill-tree.ts` coordinates the two).
+The process lister and signaler are injectable internally (`src/posix.ts`), so
+the whole POSIX cascade is unit-tested on any host.
 
 ## Limitations
 
@@ -388,7 +411,9 @@ tree is signalled. The process lister and signaler are injectable internally
   verify.
 - **Ownership is not promised.** A pid can be reused between your `spawn` and
   the kill; the OS offers no portable generation counter. Keep the
-  `ChildProcess` handle and kill it promptly.
+  `ChildProcess` handle and kill it promptly. An escalation also signals the
+  pids an in-flight run observed: they are probed again right before they are
+  signalled, but a pid reused in that window cannot be detected.
 - **Windows is always forceful.** `taskkill /T /F` has no graceful signal;
   `signal` is ignored and `timeoutMs` only bounds the helper.
 - **Windows cannot verify grandchildren individually.** `taskkill /T` walks the
@@ -416,24 +441,12 @@ stdio, then confirms the root pid is gone. If the pid already exited, the
 promise resolves with `{ killed: false, reason: 'not-found' }` instead of
 throwing, so a teardown path does not fail the run.
 
-### Why does `tree-kill` fail my Vitest stack on Windows when the server is already stopped?
-
-`tree-kill` forwards `taskkill`'s non-zero exit status to its callback, and
-`taskkill` exits 128 for a process that is gone. That is the failure described
-in [storybookjs/storybook#35277](https://github.com/storybookjs/storybook/issues/35277).
-With `quiet-kill-tree`, check `result.killed` instead of catching an error.
-
-### Is `quiet-kill-tree` a drop-in replacement for `tree-kill`?
-
-No. `tree-kill` is `(pid, signal?, callback)` and CommonJS; this package is
-`await killTree(pid, options)` with ESM and CJS builds. The migration section
-above shows the mechanical rewrite; the behavioral change is that an
-already-exited pid resolves instead of rejecting.
-
 ### Can two shutdown paths call `killTree` for the same pid at once?
 
-Yes. The second call receives the same promise, so only one enumeration and one
-helper run happen. This matters for `SIGINT` handlers racing a `finally` block.
+Yes. A second call with the same signal receives the same promise, so only one
+enumeration and one helper run happen. A second call with a different signal
+escalates the same tree instead of being dropped, and an in-flight `SIGKILL` is
+never downgraded. This matters for `SIGINT` handlers racing a `finally` block.
 
 ### How do I make sure a process that ignores `SIGTERM` is really gone?
 
@@ -441,12 +454,6 @@ Pass `timeoutMs`. On POSIX the tree gets your `signal` first, then `SIGKILL`
 after the grace period; if anything is still alive, the call rejects with
 `ETIMEDOUT`. On Windows `timeoutMs` only bounds `taskkill`, which is already
 forceful.
-
-### Does it work with ESM, CommonJS, Bun and Deno?
-
-The package ships ESM, CJS and TypeScript declarations for Node 18 and newer.
-Bun works through its Node compatibility layer. Deno needs `--allow-run` and
-`--allow-sys`; it is not part of this repo's CI matrix.
 
 ## CI
 

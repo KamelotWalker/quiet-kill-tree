@@ -198,11 +198,16 @@ async function enumerateTree(
  * POSIX implementation: enumerate descendants, signal them bottom-up, then the
  * root. With `timeoutMs`, survivors are escalated to `SIGKILL` after the grace
  * period and the call only resolves once every observed pid is gone.
+ *
+ * `publishTargets` receives the ordered pids before the first signal is sent,
+ * so a later call that asks for a different signal can reach the same set even
+ * if the root exits before it can be enumerated again.
  */
 export async function killTreePosix(
   pid: number,
   options: KillTreeOptions = {},
-  deps: PosixDeps = defaultPosixDeps
+  deps: PosixDeps = defaultPosixDeps,
+  publishTargets?: (targets: readonly number[]) => void
 ): Promise<KillTreeResult> {
   throwIfAborted(pid, options.abortSignal);
 
@@ -233,8 +238,22 @@ export async function killTreePosix(
       `Refusing to kill the tree of ${pid}: it contains the current process (${process.pid})`
     );
   }
-  const signal = options.signal ?? 'SIGTERM';
+  publishTargets?.(order);
 
+  return terminate(pid, order, options.signal ?? 'SIGTERM', options, deps);
+}
+
+/**
+ * Signals `pids` in the order given, then — when `timeoutMs` is set — waits for
+ * them to disappear and escalates survivors to `SIGKILL`.
+ */
+async function terminate(
+  pid: number,
+  pids: readonly number[],
+  signal: KillSignal,
+  options: KillTreeOptions,
+  deps: PosixDeps
+): Promise<KillTreeResult> {
   const send = (
     targets: readonly number[],
     name: KillSignal
@@ -263,7 +282,7 @@ export async function killTreePosix(
     return { delivered, denied };
   };
 
-  const first = send(order, signal);
+  const first = send(pids, signal);
   if (first.denied.length > 0) throw permissionError(pid, first.denied);
 
   if (options.timeoutMs === undefined) {
@@ -274,7 +293,7 @@ export async function killTreePosix(
 
   const deadline = deps.now() + options.timeoutMs;
   while (deps.now() < deadline) {
-    if (probeAll(order, deps.probe).survivors.length === 0) break;
+    if (probeAll(pids, deps.probe).survivors.length === 0) break;
     const remaining = Math.max(1, deadline - deps.now());
     await deps.sleep(
       Math.min(POLL_MS, remaining),
@@ -283,7 +302,7 @@ export async function killTreePosix(
     );
   }
 
-  let { survivors, denied } = probeAll(order, deps.probe);
+  let { survivors, denied } = probeAll(pids, deps.probe);
   if (denied.length > 0) throw permissionError(pid, denied);
 
   if (survivors.length > 0) {
@@ -294,7 +313,7 @@ export async function killTreePosix(
 
     const settleDeadline = deps.now() + SIGKILL_SETTLE_MS;
     while (deps.now() < settleDeadline) {
-      ({ survivors, denied } = probeAll(order, deps.probe));
+      ({ survivors, denied } = probeAll(pids, deps.probe));
       if (survivors.length === 0) break;
       const remaining = Math.max(1, settleDeadline - deps.now());
       await deps.sleep(
@@ -304,7 +323,7 @@ export async function killTreePosix(
       );
     }
 
-    ({ survivors } = probeAll(order, deps.probe));
+    ({ survivors } = probeAll(pids, deps.probe));
     if (survivors.length > 0) {
       throw new KillTreeError(
         'ETIMEDOUT',
@@ -317,4 +336,43 @@ export async function killTreePosix(
   return first.delivered > 0
     ? { pid, killed: true }
     : { pid, killed: false, reason: 'already-exited' };
+}
+
+/**
+ * Delivers `options.signal` to the tree of `pid` while an earlier run for the
+ * same pid may still be in flight.
+ *
+ * When the root is still alive the tree is enumerated again: a fresh walk finds
+ * any child spawned in the meantime and is at least as strong as the snapshot.
+ * When the root is already gone, its descendants cannot be rediscovered from a
+ * dead parent, so the pids the in-flight run observed are probed individually
+ * and the ones still alive are signalled. Pids are probed again right before
+ * they are signalled, but a pid reused in between cannot be detected.
+ */
+export async function escalateTreePosix(
+  pid: number,
+  targets: readonly number[],
+  options: KillTreeOptions = {},
+  deps: PosixDeps = defaultPosixDeps
+): Promise<KillTreeResult> {
+  throwIfAborted(pid, options.abortSignal);
+
+  if (targets.includes(process.pid)) {
+    throw new KillTreeError(
+      'EREFUSED',
+      pid,
+      `Refusing to kill the tree of ${pid}: it contains the current process (${process.pid})`
+    );
+  }
+
+  if (deps.probe(pid) !== 'dead') {
+    return killTreePosix(pid, options, deps);
+  }
+
+  const alive = targets.filter((target) => deps.probe(target) !== 'dead');
+  if (alive.length === 0) {
+    return { pid, killed: false, reason: 'already-exited' };
+  }
+
+  return terminate(pid, alive, options.signal ?? 'SIGTERM', options, deps);
 }
